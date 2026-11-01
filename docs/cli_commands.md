@@ -713,6 +713,20 @@ adverts running, set an explicit value in the 60-240 range.
 
 ---
 
+#### Limit the number of hops for a 1-byte path hash flood message
+**Usage:**
+- `get flood.max.one-byte`
+- `set flood.max.one-byte <value>`
+
+**Parameters:**
+- `value`: Maximum flood hop count (0-64) for a packet using 1-byte path hashes (`path.hash.mode 0`)
+
+**Default:** `64`
+
+**Note:** Setting this to a low value such as `3` lets nodes still sending 1-byte path hashes reach their local area, while stopping their floods from crossing a mesh that has moved to 2- or 3-byte hashes.
+
+---
+
 ### ACL
 
 #### Add, update or remove permissions for a companion

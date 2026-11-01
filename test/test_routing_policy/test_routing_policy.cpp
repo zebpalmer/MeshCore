@@ -3,51 +3,75 @@
 
 using namespace mesh;
 
-static Packet makeFlood(uint8_t route_type, uint8_t payload_type, uint8_t hops) {
+static Packet makeFlood(uint8_t route_type, uint8_t payload_type, uint8_t hops, uint8_t hash_size = 1) {
     Packet p;
     p.header = route_type | (payload_type << PH_TYPE_SHIFT);
-    p.setPathHashSizeAndCount(1, hops);
+    p.setPathHashSizeAndCount(hash_size, hops);
     p.payload_len = 1;
     return p;
 }
 
 TEST(FloodHopLimit, UnscopedFloodIsDroppedAtFirstHopWhenMaxUnscopedIsZero) {
     auto pkt = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_RESPONSE, 0);
-    EXPECT_TRUE(isFloodHopLimitExceeded(&pkt, 64, 0, 8));
+    EXPECT_TRUE(isFloodHopLimitExceeded(&pkt, 64, 0, 8, 64));
 }
 
 TEST(FloodHopLimit, ScopedFloodIsForwardedWhenMaxUnscopedIsZero) {
     for (uint8_t hops = 0; hops < 4; hops++) {
         auto pkt = makeFlood(ROUTE_TYPE_TRANSPORT_FLOOD, PAYLOAD_TYPE_RESPONSE, hops);
-        EXPECT_FALSE(isFloodHopLimitExceeded(&pkt, 64, 0, 8)) << "hops=" << (int)hops;
+        EXPECT_FALSE(isFloodHopLimitExceeded(&pkt, 64, 0, 8, 64)) << "hops=" << (int)hops;
     }
 }
 
 TEST(FloodHopLimit, UnscopedFloodSurvivesUpToMaxUnscopedHops) {
     // matches the reported workaround: raising flood.max.unscoped to the expected hop count
     auto ok = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_RESPONSE, 2);
-    EXPECT_FALSE(isFloodHopLimitExceeded(&ok, 64, 3, 8));
+    EXPECT_FALSE(isFloodHopLimitExceeded(&ok, 64, 3, 8, 64));
 
     auto too_far = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_RESPONSE, 3);
-    EXPECT_TRUE(isFloodHopLimitExceeded(&too_far, 64, 3, 8));
+    EXPECT_TRUE(isFloodHopLimitExceeded(&too_far, 64, 3, 8, 64));
 }
 
 TEST(FloodHopLimit, ScopedFloodStillHonoursFloodMaxAndAdvertMax) {
     auto beyond_max = makeFlood(ROUTE_TYPE_TRANSPORT_FLOOD, PAYLOAD_TYPE_RESPONSE, 5);
-    EXPECT_TRUE(isFloodHopLimitExceeded(&beyond_max, 5, 64, 8));
+    EXPECT_TRUE(isFloodHopLimitExceeded(&beyond_max, 5, 64, 8, 64));
 
     auto advert = makeFlood(ROUTE_TYPE_TRANSPORT_FLOOD, PAYLOAD_TYPE_ADVERT, 8);
-    EXPECT_TRUE(isFloodHopLimitExceeded(&advert, 64, 64, 8));
+    EXPECT_TRUE(isFloodHopLimitExceeded(&advert, 64, 64, 8, 64));
 }
 
 // flood.max.unscoped=0 hits adverts too, well before flood_max_advert applies: a node
 // still advertising un-scoped is invisible past its immediate neighbours
 TEST(FloodHopLimit, UnscopedAdvertIsAlsoDroppedAtHopZero) {
     auto advert = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_ADVERT, 0);
-    EXPECT_TRUE(isFloodHopLimitExceeded(&advert, 64, 0, 8));
+    EXPECT_TRUE(isFloodHopLimitExceeded(&advert, 64, 0, 8, 64));
 
     auto scoped = makeFlood(ROUTE_TYPE_TRANSPORT_FLOOD, PAYLOAD_TYPE_ADVERT, 0);
-    EXPECT_FALSE(isFloodHopLimitExceeded(&scoped, 64, 0, 8));
+    EXPECT_FALSE(isFloodHopLimitExceeded(&scoped, 64, 0, 8, 64));
+}
+
+TEST(FloodHopLimit, OneByteFloodSurvivesUpToMaxOneByteHops) {
+    auto ok = makeFlood(ROUTE_TYPE_TRANSPORT_FLOOD, PAYLOAD_TYPE_TXT_MSG, 2, 1);
+    EXPECT_FALSE(isFloodHopLimitExceeded(&ok, 64, 64, 8, 3));
+
+    auto too_far = makeFlood(ROUTE_TYPE_TRANSPORT_FLOOD, PAYLOAD_TYPE_TXT_MSG, 3, 1);
+    EXPECT_TRUE(isFloodHopLimitExceeded(&too_far, 64, 64, 8, 3));
+}
+
+TEST(FloodHopLimit, MultiByteFloodIgnoresMaxOneByte) {
+    for (uint8_t hash_size = 2; hash_size <= 3; hash_size++) {
+        auto pkt = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_TXT_MSG, 10, hash_size);
+        EXPECT_FALSE(isFloodHopLimitExceeded(&pkt, 64, 64, 8, 0)) << "hash_size=" << (int)hash_size;
+    }
+}
+
+// a 1-byte advert is capped by whichever limit is lower
+TEST(FloodHopLimit, OneByteAdvertHitsTheLowerOfAdvertAndOneByteMax) {
+    auto advert = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_ADVERT, 2, 1);
+    EXPECT_TRUE(isFloodHopLimitExceeded(&advert, 64, 64, 8, 2));
+
+    auto wide = makeFlood(ROUTE_TYPE_FLOOD, PAYLOAD_TYPE_ADVERT, 2, 2);
+    EXPECT_FALSE(isFloodHopLimitExceeded(&wide, 64, 64, 8, 2));
 }
 
 TEST(ReplyRoute, FloodRequestGetsAPathReturn) {
